@@ -58,8 +58,9 @@ func (cmd *Simon) define(args []string) {
 }
 
 func (cmd *Simon) build(args []string) {
-	job := cmd.builtJob(args)
-	fmt.Print(job.Dir)
+	var job LocatedJobSpec
+	defer fmt.Print(job.Dir)
+	job = cmd.builtJob(args)
 }
 
 func (cmd *Simon) run(args []string) {
@@ -71,6 +72,8 @@ func (cmd *Simon) run(args []string) {
 	fset.Parse(args)
 
 	var job LocatedJobSpec
+	defer fmt.Print(job.Dir)
+
 	if build {
 		job = cmd.builtJob(fset.Args())
 	} else {
