@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/szabba/msc-thesis/assert"
 )
@@ -69,7 +68,7 @@ func (spec LocatedJobSpec) EnsureLocationExists() {
 }
 
 func (spec LocatedJobSpec) StoreDefinition() {
-	f := spec.create(spec.specFilePath())
+	f := spec.create(specFileName)
 	defer f.Close()
 
 	dec := json.NewEncoder(f)
@@ -142,19 +141,8 @@ func (spec LocatedJobSpec) open(path string) *os.File {
 	return f
 }
 
-func (spec LocatedJobSpec) specFilePath() string {
-	return spec.prefixPath(specFileName)
-}
-
 func (spec LocatedJobSpec) prefixPath(path string) string {
 	return filepath.Join(spec.Dir, path)
-}
-
-func freshPath(prefix string) string {
-	now := time.Now().UTC()
-	day := now.Format("2006-01-02")
-	hour := now.Format("15:04:05.000")
-	return filepath.Join(prefix, day, hour)
 }
 
 func shellOut(cmd string) (string, error) {

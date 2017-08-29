@@ -10,6 +10,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/szabba/msc-thesis/assert"
 )
@@ -31,8 +33,13 @@ func (cmd *Simon) Main(args []string) {
 	switch cmd.Arg(0) {
 	case "def":
 		cmd.define(cmd.restArgs())
+
+	case "build", "bld":
+		cmd.build(cmd.restArgs())
+
 	case "run":
 		cmd.run(cmd.restArgs())
+
 	default:
 		cmd.printUsage()
 	}
@@ -44,20 +51,56 @@ func (cmd *Simon) define(args []string) {
 	cmd.defineFromReader(os.Stdin)
 }
 
+func (cmd *Simon) build(args []string) {
+	cmd.builtJob(args)
+}
+
 func (cmd *Simon) run(args []string) {
+	var (
+		fset  flag.FlagSet
+		build bool
+	)
+	fset.BoolVar(&build, "build", true, "whether to build the job before running it")
+	fset.Parse(args)
+
 	var job LocatedJobSpec
-	if len(args) == 1 {
-		job = cmd.loadDef(args[0])
+	if build {
+		job = cmd.builtJob(fset.Args())
 	} else {
-		job = cmd.defineFromReader(os.Stdin)
+		log.Printf("skipping build...")
+		job = cmd.loadedJob(fset.Args())
 	}
-	job.Build()
+
 	job.Init()
 	job.Run()
 }
 
 func (cmd *Simon) printUsage() {
 	cmd.PrintDefaults()
+}
+
+func (cmd *Simon) builtJob(args []string) LocatedJobSpec {
+	job := cmd.definedJob(args)
+	// TODO: Maybe make it so we don't have to rebuild the job each time?
+	job.Build()
+	return job
+}
+
+func (cmd *Simon) definedJob(args []string) LocatedJobSpec {
+	assert.That(len(args) < 2, log.Fatalf, "too many arguments (%d) -- command supports upto 1 job path", len(args))
+
+	var job LocatedJobSpec
+	if len(args) == 1 {
+		job = cmd.loadedJob(args)
+	} else {
+		job = cmd.defineFromReader(os.Stdin)
+	}
+	return job
+}
+
+func (cmd *Simon) loadedJob(args []string) LocatedJobSpec {
+	assert.That(len(args) == 1, log.Fatalf, "wrong number of arguments (%d) -- command requires 1 job path", len(args))
+	return cmd.loadDef(args[0])
 }
 
 func (cmd *Simon) defineFromReader(r io.Reader) LocatedJobSpec {
@@ -84,9 +127,14 @@ func (cmd *Simon) loadDef(dir string) LocatedJobSpec {
 
 	dec := json.NewDecoder(specFile)
 	err := dec.Decode(&spec.JobSpec)
-	assert.That(err == nil, log.Fatalf, "can't decode spec file %q: %s", spec.specFilePath(), err)
+	assert.That(err == nil, log.Fatalf, "can't decode spec file %q: %s", spec.prefixPath(specFileName), err)
 
 	return spec
 }
 
-func (cmd *Simon) freshPath() string { return freshPath(cmd.simondir) }
+func (cmd *Simon) freshPath() string {
+	now := time.Now().UTC()
+	day := now.Format("2006-01-02")
+	hour := now.Format("15:04:05.000")
+	return filepath.Join(cmd.simondir, day, hour)
+}
