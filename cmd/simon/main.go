@@ -5,8 +5,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -40,6 +42,9 @@ func (cmd *Simon) Main(args []string) {
 	case "run":
 		cmd.run(cmd.restArgs())
 
+	case "serve", "srv":
+		cmd.serve(cmd.restArgs())
+
 	default:
 		cmd.printUsage()
 	}
@@ -48,11 +53,13 @@ func (cmd *Simon) Main(args []string) {
 func (cmd *Simon) restArgs() []string { return cmd.Args()[1:] }
 
 func (cmd *Simon) define(args []string) {
-	cmd.defineFromReader(os.Stdin)
+	job := cmd.defineFromReader(os.Stdin)
+	fmt.Print(job.Dir)
 }
 
 func (cmd *Simon) build(args []string) {
-	cmd.builtJob(args)
+	job := cmd.builtJob(args)
+	fmt.Print(job.Dir)
 }
 
 func (cmd *Simon) run(args []string) {
@@ -72,7 +79,7 @@ func (cmd *Simon) run(args []string) {
 	}
 
 	job.Init()
-	job.Run()
+	job.Run(context.Background())
 }
 
 func (cmd *Simon) printUsage() {

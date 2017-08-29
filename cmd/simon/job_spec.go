@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -108,8 +109,8 @@ func (spec LocatedJobSpec) Init() {
 	assert.That(err == nil, log.Fatalf, "init failed: %s", err)
 }
 
-func (spec LocatedJobSpec) Run() {
-	cmd := exec.Command("sh", "-c", spec.RunCmd)
+func (spec LocatedJobSpec) Run(ctx context.Context) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", spec.RunCmd)
 
 	stdin := spec.open("ini.out")
 	defer stdin.Close()
