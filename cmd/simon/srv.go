@@ -29,6 +29,7 @@ type Server struct {
 	*Simon
 
 	flag.FlagSet
+	maxJobs   int
 	build     bool
 	tick      time.Duration
 	queueFlag string
@@ -38,20 +39,25 @@ func (srv *Server) Run(args []string) {
 	srv.BoolVar(&srv.build, "build", true, "whether to build the jobs before running them")
 	srv.DurationVar(&srv.tick, "tick", 100*time.Millisecond, "how often to check the queue file")
 	srv.StringVar(&srv.queueFlag, "queue", "queue", "path to queue file; if relative, resolved against the simnodir")
+	srv.IntVar(&srv.maxJobs, "max-jobs", runtime.GOMAXPROCS(0), "the maximum number of concurrent jobs to process at once")
+
 	srv.Parse(args)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	requests := make(chan (chan<- LocatedJobSpec))
 
-	workers := runtime.GOMAXPROCS(0)
-	wg.Add(workers + 2)
+	if srv.maxJobs < 1 {
+		srv.maxJobs = 1
+	}
+
+	wg.Add(srv.maxJobs + 2)
 
 	srv.setupSignalHandler(&wg, cancel)
 
 	go srv.watchQueue(ctx, &wg, requests)
 
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+	for i := 0; i < srv.maxJobs; i++ {
 		go srv.worker(ctx, &wg, requests)
 	}
 
