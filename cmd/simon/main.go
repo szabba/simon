@@ -145,6 +145,6 @@ func (cmd *Simon) loadDef(dir string) LocatedJobSpec {
 func (cmd *Simon) freshPath() string {
 	now := time.Now().UTC()
 	day := now.Format("2006-01-02")
-	hour := now.Format("15:04:05.000")
+	hour := now.Format("15:04:05.000000000")
 	return filepath.Join(cmd.simondir, day, hour)
 }
