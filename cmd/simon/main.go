@@ -5,178 +5,88 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"flag"
 	"io"
 	"log"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
 
-	"github.com/pkg/errors"
 	"github.com/szabba/msc-thesis/assert"
 )
 
-var (
-	prefix string
-)
-
 func main() {
-	flag.StringVar(&prefix, "path", ".", "path prefix for the run info")
-	flag.Parse()
-
-	var ri RunInfo
-
-	ri.ReadCommands(os.Stdin)
-	ri.PopulateVersion()
-
-	ri.RunAll(path(prefix))
+	var simon Simon
+	simon.Main(os.Args)
 }
 
-type RunInfo struct {
-	Revision string   `json:"revision"`
-	Patch    []string `json:"patch"`
-
-	Build string `json:"build"`
-	Init  string `json:"init"`
-	Run   string `json:"run"`
+type Simon struct {
+	flag.FlagSet
+	simondir string
 }
 
-func (ri *RunInfo) ReadCommands(r io.Reader) {
-	scn := bufio.NewScanner(r)
+func (cmd *Simon) Main(args []string) {
+	cmd.StringVar(&cmd.simondir, "simondir", ".simon", "")
+	cmd.Parse(args[1:])
 
-	assert.That(scn.Scan(), log.Fatalf, "unexpected error reading the build command: %s", scn.Err())
-	ri.Build = scn.Text()
-
-	assert.That(scn.Scan(), log.Fatalf, "unexpected error reading the init command: %s", scn.Err())
-	ri.Init = scn.Text()
-
-	assert.That(scn.Scan() || scn.Err() == io.EOF, log.Fatalf, "unexpected error reading run command: %s", scn.Err())
-	ri.Run = scn.Text()
-}
-
-func (ri *RunInfo) PopulateVersion() {
-	var err error
-
-	ri.Revision, err = shellOut("git rev-parse HEAD")
-	assert.That(err == nil, log.Fatalf, "can't retrieve git revision: %s", err)
-
-	patch, err := shellOut("git diff -p")
-	ri.Patch = strings.Split(patch, "\n")
-	assert.That(err == nil, log.Fatalf, "can't generate git patch: %s", err)
-}
-
-func (ri *RunInfo) RunAll(dir string) {
-	err := os.MkdirAll(dir, 0755)
-	assert.That(err == nil, log.Fatalf, "can't create directory %q: %s", dir, err)
-
-	ri.RunUptoRun(dir)
-	ri.RunRun(dir)
-}
-
-func (ri *RunInfo) RunUptoRun(dir string) {
-	ri.DumpSelf(dir)
-	ri.RunBuild(dir)
-	ri.RunInit(dir)
-}
-
-func (ri *RunInfo) DumpSelf(dir string) {
-	path := filepath.Join(dir, "simon.json")
-	f, err := os.Create(path)
-	assert.That(err == nil, log.Fatalf, "can't create %q: %s", path, err)
-	defer f.Close()
-
-	dec := json.NewEncoder(f)
-	dec.SetIndent("", "    ")
-	err = dec.Encode(ri)
-	assert.That(err == nil, log.Fatalf, "can't format run info: %s", err)
-}
-
-func (ri *RunInfo) RunBuild(dir string) {
-	bld := exec.Command("sh", "-c", ri.Build)
-
-	bldOutPath := filepath.Join(dir, "bld.out")
-	bldOut, err := os.Create(bldOutPath)
-	assert.That(err == nil, log.Fatalf, "can't create %q: %s", bldOutPath, err)
-	defer bldOut.Close()
-	bld.Stdout = bldOut
-
-	bldErrPath := filepath.Join(dir, "bld.err")
-	bldErr, err := os.Create(bldErrPath)
-	assert.That(err == nil, log.Fatalf, "cant' create %q: %s", bldErrPath, err)
-	defer bldErr.Close()
-	bld.Stderr = bldErr
-
-	err = bld.Run()
-	assert.That(err == nil, log.Fatalf, "build failed: %q", err)
-}
-
-func (ri *RunInfo) RunInit(dir string) {
-	ini := exec.Command("sh", "-c", ri.Init)
-
-	iniOutPath := filepath.Join(dir, "ini.out")
-	iniOut, err := os.Create(iniOutPath)
-	assert.That(err == nil, log.Fatalf, "can't create %q: %s", iniOutPath, err)
-	defer iniOut.Close()
-	ini.Stdout = iniOut
-
-	iniErrPath := filepath.Join(dir, "ini.err")
-	iniErr, err := os.Create(iniErrPath)
-	assert.That(err == nil, log.Fatalf, "can't create %q: %s", iniErrPath, err)
-	defer iniErr.Close()
-	ini.Stderr = iniErr
-
-	err = ini.Run()
-	assert.That(err == nil, log.Fatalf, "init failed: %s", err)
-}
-
-func (ri *RunInfo) RunRun(dir string) {
-	cmd := exec.Command("sh", "-c", ri.Run)
-
-	inPath := filepath.Join(dir, "ini.out")
-	stdin, err := os.Open(inPath)
-	assert.That(err == nil, log.Fatalf, "can't open %q: %s", inPath, err)
-	defer stdin.Close()
-	cmd.Stdin = stdin
-
-	outPath := filepath.Join(dir, "run.out")
-	stdout, err := os.Create(outPath)
-	assert.That(err == nil, log.Fatalf, "can't create %q: %s", outPath, err)
-	defer stdout.Close()
-	cmd.Stdout = stdout
-
-	errPath := filepath.Join(dir, "run.err")
-	stderr, err := os.Create(errPath)
-	assert.That(err == nil, log.Fatalf, "can't create %q: %s", errPath, err)
-	defer stderr.Close()
-	cmd.Stderr = stderr
-
-	err = cmd.Run()
-	assert.That(err == nil, log.Fatalf, "run failed: %s", err)
-}
-
-func path(prefix string) string {
-	now := time.Now().UTC()
-	day := now.Format("2006-01-02")
-	hour := now.Format("15:04:05.000")
-	return filepath.Join(prefix, day, hour)
-}
-
-func shellOut(cmd string) (string, error) {
-	proc := exec.Command("sh", "-c", cmd)
-	var out bytes.Buffer
-	proc.Stdout = &out
-	proc.Stderr = os.Stderr
-	err := proc.Run()
-
-	if err == nil && !proc.ProcessState.Success() {
-		return "", ErrFailedSubcommand
+	switch cmd.Arg(0) {
+	case "def":
+		cmd.define(cmd.restArgs())
+	case "run":
+		cmd.run(cmd.restArgs())
+	default:
+		cmd.printUsage()
 	}
-	return out.String(), nil
 }
 
-var ErrFailedSubcommand = errors.New("failed subcommand")
+func (cmd *Simon) restArgs() []string { return cmd.Args()[1:] }
+
+func (cmd *Simon) define(args []string) {
+	cmd.defineFromReader(os.Stdin)
+}
+
+func (cmd *Simon) run(args []string) {
+	var job LocatedJobSpec
+	if len(args) == 1 {
+		job = cmd.loadDef(args[0])
+	} else {
+		job = cmd.defineFromReader(os.Stdin)
+	}
+	job.Build()
+	job.Init()
+	job.Run()
+}
+
+func (cmd *Simon) printUsage() {
+	cmd.PrintDefaults()
+}
+
+func (cmd *Simon) defineFromReader(r io.Reader) LocatedJobSpec {
+	var spec JobSpec
+
+	spec.ReadCommands(os.Stdin)
+	spec.PopulateVersion()
+
+	located := spec.Locate(cmd.freshPath())
+
+	located.EnsureLocationExists()
+	located.StoreDefinition()
+
+	log.Printf("created job defintion at %q", located.Dir)
+
+	return located
+}
+
+func (cmd *Simon) loadDef(dir string) LocatedJobSpec {
+	spec := LocatedJobSpec{Dir: dir}
+
+	specFile := spec.open(specFileName)
+	defer specFile.Close()
+
+	dec := json.NewDecoder(specFile)
+	err := dec.Decode(&spec.JobSpec)
+	assert.That(err == nil, log.Fatalf, "can't decode spec file %q: %s", spec.specFilePath(), err)
+
+	return spec
+}
+
+func (cmd *Simon) freshPath() string { return freshPath(cmd.simondir) }
