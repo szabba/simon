@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/pkg/errors"
+
 	"github.com/szabba/msc-thesis/assert"
 )
 
@@ -53,14 +55,22 @@ func (cmd *Simon) Main(args []string) {
 func (cmd *Simon) restArgs() []string { return cmd.Args()[1:] }
 
 func (cmd *Simon) define(args []string) {
-	job := cmd.defineFromReader(os.Stdin)
-	fmt.Print(job.Dir)
+	job, err := cmd.defineFromReader(os.Stdin)
+	if err != nil {
+		log.Printf("%s", err)
+		return
+	}
+	fmt.Print(job.Name(cmd.simondir))
 }
 
 func (cmd *Simon) build(args []string) {
-	var job LocatedJobSpec
-	defer fmt.Print(job.Dir)
-	job = cmd.builtJob(args)
+	var (
+		job LocatedJobSpec
+		err error
+	)
+	defer fmt.Print(job.Name(cmd.simondir))
+	job, err = cmd.builtJob(args)
+	assert.That(err == nil, log.Fatalf, "%s", err)
 }
 
 func (cmd *Simon) run(args []string) {
@@ -71,75 +81,103 @@ func (cmd *Simon) run(args []string) {
 	fset.BoolVar(&build, "build", true, "whether to build the job before running it")
 	fset.Parse(args)
 
-	var job LocatedJobSpec
-	defer fmt.Print(job.Dir)
+	var (
+		job LocatedJobSpec
+		err error
+	)
+	defer fmt.Print(job.Name(cmd.simondir))
 
 	if build {
-		job = cmd.builtJob(fset.Args())
+		job, err = cmd.builtJob(fset.Args())
+		assert.That(err == nil, log.Fatalf, "%s", err)
 	} else {
 		log.Printf("skipping build...")
-		job = cmd.loadedJob(fset.Args())
+		job, err = cmd.loadedJob(fset.Args())
+		assert.That(err == nil, log.Fatalf, "%s", err)
 	}
 
-	job.Init()
-	job.Run(context.Background())
+	err = job.Init(context.Background())
+	assert.That(err == nil, log.Fatalf, "%s", err)
+
+	err = job.Run(context.Background())
+	assert.That(err == nil, log.Fatalf, "%s", err)
 }
 
 func (cmd *Simon) printUsage() {
 	cmd.PrintDefaults()
 }
 
-func (cmd *Simon) builtJob(args []string) LocatedJobSpec {
-	job := cmd.definedJob(args)
-	// TODO: Maybe make it so we don't have to rebuild the job each time?
-	job.Build()
-	return job
+func (cmd *Simon) builtJob(args []string) (LocatedJobSpec, error) {
+	job, err := cmd.definedJob(args)
+	if err == nil {
+		err = job.Build(context.Background())
+	}
+	return job, errors.Wrap(err, "build failed")
 }
 
-func (cmd *Simon) definedJob(args []string) LocatedJobSpec {
+func (cmd *Simon) definedJob(args []string) (LocatedJobSpec, error) {
 	assert.That(len(args) < 2, log.Fatalf, "too many arguments (%d) -- command supports upto 1 job path", len(args))
 
-	var job LocatedJobSpec
+	var (
+		job LocatedJobSpec
+		err error
+	)
 	if len(args) == 1 {
-		job = cmd.loadedJob(args)
+		job, err = cmd.loadedJob(args)
 	} else {
-		job = cmd.defineFromReader(os.Stdin)
+		job, err = cmd.defineFromReader(os.Stdin)
 	}
-	return job
+	return job, err
 }
 
-func (cmd *Simon) loadedJob(args []string) LocatedJobSpec {
+func (cmd *Simon) loadedJob(args []string) (LocatedJobSpec, error) {
 	assert.That(len(args) == 1, log.Fatalf, "wrong number of arguments (%d) -- command requires 1 job path", len(args))
 	return cmd.loadDef(args[0])
 }
 
-func (cmd *Simon) defineFromReader(r io.Reader) LocatedJobSpec {
-	var spec JobSpec
+func (cmd *Simon) defineFromReader(r io.Reader) (LocatedJobSpec, error) {
+	var spec LocatedJobSpec
 
 	spec.ReadCommands(os.Stdin)
-	spec.PopulateVersion()
+	err := spec.PopulateVersion()
 
-	located := spec.Locate(cmd.freshPath())
+	if err == nil {
+		spec = spec.Locate(cmd.freshPath())
+	}
 
-	located.EnsureLocationExists()
-	located.StoreDefinition()
+	if err == nil {
+		err = spec.EnsureLocationExists()
+	}
 
-	log.Printf("created job defintion at %q", located.Dir)
+	if err == nil {
+		err = spec.StoreDefinition()
+	}
 
-	return located
+	if err == nil {
+		log.Printf("created job defintion at %q", spec.Dir)
+	}
+
+	return spec, errors.Wrapf(err, "can't define job")
 }
 
-func (cmd *Simon) loadDef(dir string) LocatedJobSpec {
+func (cmd *Simon) loadDef(dir string) (LocatedJobSpec, error) {
+
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(cmd.simondir, dir)
+	}
 	spec := LocatedJobSpec{Dir: dir}
 
-	specFile := spec.open(specFileName)
-	defer specFile.Close()
+	specPath := spec.prefixPath(specFileName)
+	specFile, err := os.Open(specPath)
+	err = errors.Wrapf(err, "can't open job spec")
 
-	dec := json.NewDecoder(specFile)
-	err := dec.Decode(&spec.JobSpec)
-	assert.That(err == nil, log.Fatalf, "can't decode spec file %q: %s", spec.prefixPath(specFileName), err)
+	if err == nil {
+		defer specFile.Close()
+		dec := json.NewDecoder(specFile)
+		err = errors.Wrapf(dec.Decode(&spec.JobSpec), "can't decode spec file %q", specPath)
+	}
 
-	return spec
+	return spec, errors.Wrapf(err, "can't load job %q", spec.Dir)
 }
 
 func (cmd *Simon) freshPath() string {

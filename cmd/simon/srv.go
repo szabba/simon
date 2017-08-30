@@ -35,6 +35,8 @@ type Server struct {
 	queueFlag string
 }
 
+// MAIN PROGRAM + INIT
+
 func (srv *Server) Run(args []string) {
 	srv.BoolVar(&srv.build, "build", true, "whether to build the jobs before running them")
 	srv.DurationVar(&srv.tick, "tick", 100*time.Millisecond, "how often to check the queue file")
@@ -82,6 +84,8 @@ func (srv *Server) onSignal(wg *sync.WaitGroup, cancel func(), signals <-chan os
 	}
 }
 
+// CONCURRENT ACTORS
+
 func (srv *Server) watchQueue(ctx context.Context, wg *sync.WaitGroup, jobRequests <-chan (chan<- LocatedJobSpec)) {
 	defer wg.Done()
 
@@ -125,9 +129,18 @@ func (srv *Server) worker(ctx context.Context, wg *sync.WaitGroup, requests chan
 	requests <- jobs
 
 	for {
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		select {
 		case job := <-jobs:
-			srv.do(ctx, job)
+			err := srv.do(ctx, job)
+			assert.That(err == nil, log.Printf, "%s", err)
+
 			requests <- jobs
 
 		case <-ctx.Done():
@@ -136,12 +149,14 @@ func (srv *Server) worker(ctx context.Context, wg *sync.WaitGroup, requests chan
 	}
 }
 
+// SINGLE THREADED STUFF
+
 func (srv *Server) getJob() *LocatedJobSpec {
 	oldQueue, err := ioutil.ReadFile(srv.queuePath())
 	if err != nil {
 		log.Printf("can't read queuefile %q: %s", srv.queuePath(), err)
 		err = ioutil.WriteFile(srv.queuePath(), []byte{}, 0644)
-		assert.That(err == nil, log.Fatalf, "failed to write open queuefile %q: %s", srv.queuePath(), err)
+		assert.That(err == nil, log.Fatalf, "failed to create empty queuefile %q: %s", srv.queuePath(), err)
 		return nil
 	}
 
@@ -161,28 +176,42 @@ func (srv *Server) getJob() *LocatedJobSpec {
 		return nil
 	}
 
-	job := srv.loadDef(string(jobs[0]))
+	job, err := srv.loadDef(string(jobs[0]))
+	if err != nil {
+		log.Printf("%s", err)
+		return nil
+	}
 	return &job
 }
 
-func (srv *Server) do(ctx context.Context, job LocatedJobSpec) {
+func (srv *Server) do(ctx context.Context, job LocatedJobSpec) error {
 
 	if srv.build {
+
 		log.Printf("job %q: build starts", job.Dir)
-		job.Build()
+		err := job.Build(ctx)
+		if err != nil {
+			return err
+		}
 		log.Printf("job %q: build done", job.Dir)
 
 	} else {
-		log.Printf("job %q: skipping build", job.Dir)
+		log.Printf("job %q: build skipped", job.Dir)
 	}
 
 	log.Printf("job %q: init starts", job.Dir)
-	job.Init()
+	err := job.Init(ctx)
+	if err != nil {
+		return err
+	}
 	log.Printf("job %q: init done", job.Dir)
 
 	log.Printf("job %q: run starts", job.Dir)
-	job.Run(ctx)
-	log.Printf("job %q: run done", job.Dir)
+	err = job.Run(ctx)
+	if err == nil {
+		log.Printf("job %q: run done", job.Dir)
+	}
+	return err
 }
 
 func (srv *Server) queuePath() string {

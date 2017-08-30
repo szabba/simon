@@ -6,16 +6,16 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	"github.com/szabba/msc-thesis/assert"
 )
@@ -48,117 +48,152 @@ func (spec *JobSpec) ReadCommands(r io.Reader) {
 	spec.RunCmd = scn.Text()
 }
 
-func (spec *JobSpec) PopulateVersion() {
+func (spec *JobSpec) PopulateVersion() error {
 	var err error
 
 	spec.Revision, err = shellOut("git rev-parse HEAD")
-	assert.That(err == nil, log.Fatalf, "can't retrieve git revision: %s", err)
+	if err != nil {
+		return errors.Wrap(err, "can't obtain git revision")
+	}
 
 	patch, err := shellOut("git diff -p")
+	if err != nil {
+		return errors.Wrap(err, "can't obtain git diff")
+	}
+
 	spec.Patch = strings.Split(patch, "\n")
-	assert.That(err == nil, log.Fatalf, "can't generate git patch: %s", err)
+	return nil
 }
 
 func (spec JobSpec) Locate(path string) LocatedJobSpec {
 	return LocatedJobSpec{Dir: path, JobSpec: spec}
 }
 
-func (spec LocatedJobSpec) EnsureLocationExists() {
-	err := os.MkdirAll(spec.Dir, 0755)
-	assert.That(err == nil, log.Fatalf, "can't create directory %q: %s", spec.Dir, err)
+func (spec LocatedJobSpec) EnsureLocationExists() error {
+	return errors.Wrapf(os.MkdirAll(spec.Dir, 0755), "can't create directory %q: %s", spec.Dir)
 }
 
-func (spec LocatedJobSpec) StoreDefinition() {
-	f := spec.create(specFileName)
+func (spec LocatedJobSpec) StoreDefinition() error {
+	f, err := os.Create(spec.prefixPath(specFileName))
+	if err != nil {
+		return errors.Wrapf(err, "can't create job spec file")
+	}
 	defer f.Close()
 
 	dec := json.NewEncoder(f)
 	dec.SetIndent("", "    ")
 
-	err := dec.Encode(spec.JobSpec)
-	assert.That(err == nil, log.Fatalf, "can't format run info: %s", err)
+	return errors.Wrap(dec.Encode(spec.JobSpec), "can't encode job spec")
 }
 
-func (spec LocatedJobSpec) Build() {
-	cmd := exec.Command("sh", "-c", spec.BuildCmd)
+func (spec LocatedJobSpec) Build(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "sh", "-c", spec.BuildCmd)
 
-	stdout := spec.create("bld.out")
-	defer stdout.Close()
-	cmd.Stdout = stdout
+	var err error
 
-	stderr := spec.create("bld.err")
-	defer stderr.Close()
-	cmd.Stderr = stderr
+	cmd.Stdout, err = os.Create(spec.prefixPath("bld.out"))
+	err = errors.Wrap(err, "can't create file")
 
-	err := cmd.Run()
-	assert.That(err == nil, log.Fatalf, "build failed: %q", err)
+	if err == nil {
+		defer Close(cmd.Stdout)
+
+		cmd.Stderr, err = os.Create(spec.prefixPath("bld.err"))
+		err = errors.Wrap(err, "can't create file")
+	}
+
+	if err == nil {
+		defer Close(cmd.Stderr)
+
+		log.Printf("job %q: running build command: %s", spec.Dir, spec.BuildCmd)
+		err = cmd.Run()
+	}
+
+	return errors.Wrapf(err, "job %q: build failed", spec.Dir)
 }
 
-func (spec LocatedJobSpec) Init() {
-	cmd := exec.Command("sh", "-c", spec.InitCmd)
+func (spec LocatedJobSpec) Init(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "sh", "-c", spec.InitCmd)
 
-	stdout := spec.create("ini.out")
-	defer stdout.Close()
-	cmd.Stdout = stdout
+	var err error
 
-	stder := spec.create("ini.err")
-	defer stder.Close()
-	cmd.Stderr = stder
+	cmd.Stdout, err = os.Create(spec.prefixPath("ini.out"))
+	err = errors.Wrap(err, "can't create file")
 
-	err := cmd.Run()
-	assert.That(err == nil, log.Fatalf, "init failed: %s", err)
+	if err == nil {
+		defer Close(cmd.Stdout)
+
+		cmd.Stderr, err = os.Create(spec.prefixPath("ini.err"))
+		err = errors.Wrap(err, "can't create file")
+	}
+
+	if err == nil {
+		defer Close(cmd.Stderr)
+
+		log.Printf("job %q: running init command: %s", spec.Dir, spec.InitCmd)
+		err = cmd.Run()
+	}
+
+	return errors.Wrapf(err, "job %q: init failed", spec.Dir)
 }
 
-func (spec LocatedJobSpec) Run(ctx context.Context) {
+func (spec LocatedJobSpec) Run(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c", spec.RunCmd)
 
-	stdin := spec.open("ini.out")
-	defer stdin.Close()
-	cmd.Stdin = stdin
+	var err error
 
-	stdout := spec.create("run.out")
-	defer stdout.Close()
-	cmd.Stdout = stdout
+	cmd.Stdin, err = os.Open(spec.prefixPath("ini.out"))
+	err = errors.Wrap(err, "can't access initial conditions")
 
-	stderr := spec.create("run.err")
-	defer stderr.Close()
-	cmd.Stderr = stderr
+	if err == nil {
+		defer Close(cmd.Stdin)
 
-	err := cmd.Run()
-	assert.That(err == nil, log.Fatalf, "init failed: %s", err)
+		cmd.Stdout, err = os.Create(spec.prefixPath("run.out"))
+		err = errors.Wrap(err, "can't create file")
+	}
+
+	if err == nil {
+		defer Close(cmd.Stdout)
+
+		cmd.Stderr, err = os.Create(spec.prefixPath("run.err"))
+		err = errors.Wrap(err, "can't create file")
+	}
+
+	if err == nil {
+		defer Close(cmd.Stderr)
+
+		log.Printf("job %q: running run command: %s", spec.Dir, spec.RunCmd)
+		err = cmd.Run()
+	}
+
+	return errors.Wrapf(err, "job %q: run failed", spec.Dir)
 }
 
-func (spec LocatedJobSpec) create(path string) *os.File {
-	prefixedPath := spec.prefixPath(path)
-	f, err := os.Create(prefixedPath)
-	assert.That(err == nil, log.Fatalf, "can't create %q: %s", prefixedPath, err)
-	return f
-}
+func (spec LocatedJobSpec) Name(simondir string) string {
+	absSimondir, _ := filepath.Abs(simondir)
+	absDir, _ := filepath.Abs(spec.Dir)
 
-func (spec LocatedJobSpec) open(path string) *os.File {
-	prefixedPath := spec.prefixPath(path)
-	f, err := os.Open(prefixedPath)
-	assert.That(err == nil, log.Fatalf, "can't open %q: %s", prefixedPath, err)
-	return f
+	if strings.HasPrefix(absDir, absSimondir) {
+		suffix, _ := filepath.Rel(absSimondir, absDir)
+		return suffix
+	}
+
+	return spec.Dir
 }
 
 func (spec LocatedJobSpec) prefixPath(path string) string {
 	return filepath.Join(spec.Dir, path)
 }
 
-func shellOut(cmd string) (string, error) {
-	proc := exec.Command("sh", "-c", cmd)
-	var out bytes.Buffer
-	proc.Stdout = &out
-	proc.Stderr = os.Stderr
-	err := proc.Run()
-
-	if err == nil && !proc.ProcessState.Success() {
-		return "", ErrFailedSubcommand
+func Close(closer interface{}) {
+	switch closer := closer.(type) {
+	case io.Closer:
+		closer.Close()
 	}
-	return out.String(), nil
 }
 
-var ErrFailedSubcommand = errors.New("failed subcommand")
+func shellOut(cmd string) (string, error) {
+	bs, err := exec.Command("sh", "-c", cmd).Output()
+	return string(bs), err
+}
 
 const specFileName = "job_spec.json"
