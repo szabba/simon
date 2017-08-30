@@ -20,45 +20,52 @@ import (
 )
 
 func (cmd *Simon) serve(args []string) {
-	srv := Server{Simon: cmd}
-	srv.Run(args)
+	NewServer(cmd.simondir).Run(args)
 }
 
 type Server struct {
-	*Simon
+	simondir Simondir
 
-	flag.FlagSet
-	maxJobs   int
-	build     bool
-	tick      time.Duration
-	queueFlag string
+	flags struct {
+		flag.FlagSet
+		maxJobs int
+		build   bool
+		tick    time.Duration
+		queue   string
+	}
+}
+
+func NewServer(dir Simondir) *Server {
+	srv := &Server{simondir: dir}
+
+	srv.flags.BoolVar(&srv.flags.build, "build", true, "whether to build the jobs before running them")
+	srv.flags.DurationVar(&srv.flags.tick, "tick", 100*time.Millisecond, "how often to check the queue file")
+	srv.flags.StringVar(&srv.flags.queue, "queue", "queue", "path to queue file; if relative, resolved against the simnodir")
+	srv.flags.IntVar(&srv.flags.maxJobs, "max-jobs", runtime.GOMAXPROCS(0), "the maximum number of concurrent jobs to process at once")
+
+	return srv
 }
 
 // MAIN PROGRAM + INIT
 
 func (srv *Server) Run(args []string) {
-	srv.BoolVar(&srv.build, "build", true, "whether to build the jobs before running them")
-	srv.DurationVar(&srv.tick, "tick", 100*time.Millisecond, "how often to check the queue file")
-	srv.StringVar(&srv.queueFlag, "queue", "queue", "path to queue file; if relative, resolved against the simnodir")
-	srv.IntVar(&srv.maxJobs, "max-jobs", runtime.GOMAXPROCS(0), "the maximum number of concurrent jobs to process at once")
 
-	srv.Parse(args)
+	srv.flags.Parse(args)
+	if srv.flags.maxJobs < 1 {
+		srv.flags.maxJobs = 1
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	requests := make(chan (chan<- LocatedJobSpec))
 
-	if srv.maxJobs < 1 {
-		srv.maxJobs = 1
-	}
-
-	wg.Add(srv.maxJobs + 2)
+	wg.Add(srv.flags.maxJobs + 2)
 
 	srv.setupSignalHandler(&wg, cancel)
 
 	go srv.watchQueue(ctx, &wg, requests)
 
-	for i := 0; i < srv.maxJobs; i++ {
+	for i := 0; i < srv.flags.maxJobs; i++ {
 		go srv.worker(ctx, &wg, requests)
 	}
 
@@ -89,7 +96,7 @@ func (srv *Server) watchQueue(ctx context.Context, wg *sync.WaitGroup, jobReques
 	defer wg.Done()
 
 	var reqs []chan<- LocatedJobSpec
-	ticker := time.NewTicker(srv.tick)
+	ticker := time.NewTicker(srv.flags.tick)
 
 	for {
 
@@ -189,7 +196,7 @@ func (srv *Server) getJob() *LocatedJobSpec {
 
 func (srv *Server) do(ctx context.Context, job LocatedJobSpec) (err error) {
 
-	if srv.build {
+	if srv.flags.build {
 		err = srv.runPhase(ctx, job, "build", LocatedJobSpec.Build)
 	} else {
 		log.Printf("job %q: skipping build", job.Dir)
@@ -221,4 +228,6 @@ func (srv *Server) runPhase(
 	return err
 }
 
-func (srv *Server) queuePath() string { return srv.simondir.NormalizePath(srv.queueFlag) }
+func (srv *Server) queuePath() string {
+	return srv.simondir.NormalizePath(srv.flags.queue)
+}
