@@ -187,32 +187,36 @@ func (srv *Server) getJob() *LocatedJobSpec {
 	return &job
 }
 
-func (srv *Server) do(ctx context.Context, job LocatedJobSpec) error {
+func (srv *Server) do(ctx context.Context, job LocatedJobSpec) (err error) {
 
 	if srv.build {
-
-		log.Printf("job %q: build starts", job.Dir)
-		err := job.Build(ctx, srv.simondir)
-		if err != nil {
-			return err
-		}
-		log.Printf("job %q: build done", job.Dir)
-
+		err = srv.runPhase(ctx, job, "build", LocatedJobSpec.Build)
 	} else {
-		log.Printf("job %q: build skipped", job.Dir)
+		log.Printf("job %q: skipping build", job.Dir)
 	}
-
-	log.Printf("job %q: init starts", job.Dir)
-	err := job.Init(ctx, srv.simondir)
 	if err != nil {
 		return err
 	}
-	log.Printf("job %q: init done", job.Dir)
 
-	log.Printf("job %q: run starts", job.Dir)
-	err = job.Run(ctx, srv.simondir)
+	err = srv.runPhase(ctx, job, "init", LocatedJobSpec.Init)
+	if err != nil {
+		return err
+	}
+
+	return srv.runPhase(ctx, job, "run", LocatedJobSpec.Run)
+}
+
+func (srv *Server) runPhase(
+	ctx context.Context,
+	job LocatedJobSpec,
+	phase string,
+	f func(LocatedJobSpec, context.Context, Simondir) error,
+) error {
+
+	log.Printf("job %q: %s starts", job.Dir, phase)
+	err := f(job, ctx, srv.simondir)
 	if err == nil {
-		log.Printf("job %q: run done", job.Dir)
+		log.Printf("job %q: %s done", job.Dir, phase)
 	}
 	return err
 }
