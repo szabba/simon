@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -159,21 +158,4 @@ func (cmd *Simon) defineFromReader(r io.Reader) (LocatedJobSpec, error) {
 	}
 
 	return spec, errors.Wrapf(err, "can't define job")
-}
-
-func (job *LocatedJobSpec) Load(simondir Simondir, name string) error {
-	job.Dir = name
-
-	specPath := simondir.InJob(*job, specFileName)
-	specFile, err := os.Open(specPath)
-	err = errors.Wrap(err, "can't open job spec")
-
-	if err == nil {
-		defer specFile.Close()
-		dec := json.NewDecoder(specFile)
-		err = dec.Decode(&job.JobSpec)
-		err = errors.Wrapf(err, "can't decode spec file %q", specPath)
-	}
-
-	return errors.Wrapf(err, "can't load job %q", name)
 }

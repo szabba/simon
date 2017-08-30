@@ -68,6 +68,23 @@ func (spec JobSpec) Locate(path string) LocatedJobSpec {
 	return LocatedJobSpec{Dir: path, JobSpec: spec}
 }
 
+func (job *LocatedJobSpec) Load(simondir Simondir, name string) error {
+	job.Dir = name
+
+	specPath := simondir.InJob(*job, specFileName)
+	specFile, err := os.Open(specPath)
+	err = errors.Wrap(err, "can't open job spec")
+
+	if err == nil {
+		defer specFile.Close()
+		dec := json.NewDecoder(specFile)
+		err = dec.Decode(&job.JobSpec)
+		err = errors.Wrapf(err, "can't decode spec file %q", specPath)
+	}
+
+	return errors.Wrapf(err, "can't load job %q", name)
+}
+
 func (spec LocatedJobSpec) EnsureLocationExists() error {
 	return errors.Wrapf(os.MkdirAll(spec.Dir, 0755), "can't create directory %q: %s", spec.Dir)
 }
