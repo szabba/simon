@@ -117,6 +117,9 @@ func (srv *Server) watchQueue(ctx context.Context, wg *sync.WaitGroup, jobReques
 
 			copy(reqs[:len(reqs)-1], reqs[1:])
 			reqs = reqs[:len(reqs)-1]
+
+		case <-ctx.Done():
+			return
 		}
 	}
 }
