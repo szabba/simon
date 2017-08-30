@@ -12,8 +12,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/pkg/errors"
 
@@ -27,11 +25,12 @@ func main() {
 
 type Simon struct {
 	flag.FlagSet
-	simondir string
+	simondir Simondir
 }
 
 func (cmd *Simon) Main(args []string) {
-	cmd.StringVar(&cmd.simondir, "simondir", ".simon", "")
+	cmd.simondir.Set(".simon")
+	cmd.Var(&cmd.simondir, "simondir", "")
 	cmd.Parse(args[1:])
 
 	switch cmd.Arg(0) {
@@ -60,7 +59,7 @@ func (cmd *Simon) define(args []string) {
 		log.Printf("%s", err)
 		return
 	}
-	fmt.Print(job.Name(cmd.simondir))
+	fmt.Print(cmd.simondir.NormalizeJobPath(job))
 }
 
 func (cmd *Simon) build(args []string) {
@@ -68,7 +67,7 @@ func (cmd *Simon) build(args []string) {
 		job LocatedJobSpec
 		err error
 	)
-	defer fmt.Print(job.Name(cmd.simondir))
+	defer fmt.Printf("%s", cmd.simondir.NormalizeJobPath(job))
 	job, err = cmd.builtJob(args)
 	assert.That(err == nil, log.Fatalf, "%s", err)
 }
@@ -85,7 +84,7 @@ func (cmd *Simon) run(args []string) {
 		job LocatedJobSpec
 		err error
 	)
-	defer fmt.Print(job.Name(cmd.simondir))
+	defer fmt.Printf("%s", cmd.simondir.NormalizeJobPath(job))
 
 	if build {
 		job, err = cmd.builtJob(fset.Args())
@@ -96,10 +95,10 @@ func (cmd *Simon) run(args []string) {
 		assert.That(err == nil, log.Fatalf, "%s", err)
 	}
 
-	err = job.Init(context.Background())
+	err = job.Init(context.Background(), cmd.simondir)
 	assert.That(err == nil, log.Fatalf, "%s", err)
 
-	err = job.Run(context.Background())
+	err = job.Run(context.Background(), cmd.simondir)
 	assert.That(err == nil, log.Fatalf, "%s", err)
 }
 
@@ -110,7 +109,7 @@ func (cmd *Simon) printUsage() {
 func (cmd *Simon) builtJob(args []string) (LocatedJobSpec, error) {
 	job, err := cmd.definedJob(args)
 	if err == nil {
-		err = job.Build(context.Background())
+		err = job.Build(context.Background(), cmd.simondir)
 	}
 	return job, errors.Wrap(err, "build failed")
 }
@@ -132,7 +131,9 @@ func (cmd *Simon) definedJob(args []string) (LocatedJobSpec, error) {
 
 func (cmd *Simon) loadedJob(args []string) (LocatedJobSpec, error) {
 	assert.That(len(args) == 1, log.Fatalf, "wrong number of arguments (%d) -- command requires 1 job path", len(args))
-	return cmd.loadDef(args[0])
+	var job LocatedJobSpec
+	err := job.Load(cmd.simondir, args[0])
+	return job, err
 }
 
 func (cmd *Simon) defineFromReader(r io.Reader) (LocatedJobSpec, error) {
@@ -142,7 +143,7 @@ func (cmd *Simon) defineFromReader(r io.Reader) (LocatedJobSpec, error) {
 	err := spec.PopulateVersion()
 
 	if err == nil {
-		spec = spec.Locate(cmd.freshPath())
+		spec = spec.Locate(cmd.simondir.FreshJobPath())
 	}
 
 	if err == nil {
@@ -150,7 +151,7 @@ func (cmd *Simon) defineFromReader(r io.Reader) (LocatedJobSpec, error) {
 	}
 
 	if err == nil {
-		err = spec.StoreDefinition()
+		err = spec.StoreDefinition(cmd.simondir)
 	}
 
 	if err == nil {
@@ -160,29 +161,19 @@ func (cmd *Simon) defineFromReader(r io.Reader) (LocatedJobSpec, error) {
 	return spec, errors.Wrapf(err, "can't define job")
 }
 
-func (cmd *Simon) loadDef(dir string) (LocatedJobSpec, error) {
+func (job *LocatedJobSpec) Load(simondir Simondir, name string) error {
+	job.Dir = name
 
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(cmd.simondir, dir)
-	}
-	spec := LocatedJobSpec{Dir: dir}
-
-	specPath := spec.prefixPath(specFileName)
+	specPath := simondir.InJob(*job, specFileName)
 	specFile, err := os.Open(specPath)
-	err = errors.Wrapf(err, "can't open job spec")
+	err = errors.Wrap(err, "can't open job spec")
 
 	if err == nil {
 		defer specFile.Close()
 		dec := json.NewDecoder(specFile)
-		err = errors.Wrapf(dec.Decode(&spec.JobSpec), "can't decode spec file %q", specPath)
+		err = dec.Decode(&job.JobSpec)
+		err = errors.Wrapf(err, "can't decode spec file %q", specPath)
 	}
 
-	return spec, errors.Wrapf(err, "can't load job %q", spec.Dir)
-}
-
-func (cmd *Simon) freshPath() string {
-	now := time.Now().UTC()
-	day := now.Format("2006-01-02")
-	hour := now.Format("15:04:05.000000000")
-	return filepath.Join(cmd.simondir, day, hour)
+	return errors.Wrapf(err, "can't load job %q", name)
 }

@@ -12,7 +12,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -73,8 +72,8 @@ func (spec LocatedJobSpec) EnsureLocationExists() error {
 	return errors.Wrapf(os.MkdirAll(spec.Dir, 0755), "can't create directory %q: %s", spec.Dir)
 }
 
-func (spec LocatedJobSpec) StoreDefinition() error {
-	f, err := os.Create(spec.prefixPath(specFileName))
+func (spec LocatedJobSpec) StoreDefinition(dir Simondir) error {
+	f, err := os.Create(dir.InJob(spec, specFileName))
 	if err != nil {
 		return errors.Wrapf(err, "can't create job spec file")
 	}
@@ -86,18 +85,18 @@ func (spec LocatedJobSpec) StoreDefinition() error {
 	return errors.Wrap(dec.Encode(spec.JobSpec), "can't encode job spec")
 }
 
-func (spec LocatedJobSpec) Build(ctx context.Context) error {
+func (spec LocatedJobSpec) Build(ctx context.Context, dir Simondir) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c", spec.BuildCmd)
 
 	var err error
 
-	cmd.Stdout, err = os.Create(spec.prefixPath("bld.out"))
+	cmd.Stdout, err = os.Create(dir.InJob(spec, "bld.out"))
 	err = errors.Wrap(err, "can't create file")
 
 	if err == nil {
 		defer Close(cmd.Stdout)
 
-		cmd.Stderr, err = os.Create(spec.prefixPath("bld.err"))
+		cmd.Stderr, err = os.Create(dir.InJob(spec, "bld.err"))
 		err = errors.Wrap(err, "can't create file")
 	}
 
@@ -111,18 +110,18 @@ func (spec LocatedJobSpec) Build(ctx context.Context) error {
 	return errors.Wrapf(err, "job %q: build failed", spec.Dir)
 }
 
-func (spec LocatedJobSpec) Init(ctx context.Context) error {
+func (spec LocatedJobSpec) Init(ctx context.Context, dir Simondir) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c", spec.InitCmd)
 
 	var err error
 
-	cmd.Stdout, err = os.Create(spec.prefixPath("ini.out"))
+	cmd.Stdout, err = os.Create(dir.InJob(spec, "ini.out"))
 	err = errors.Wrap(err, "can't create file")
 
 	if err == nil {
 		defer Close(cmd.Stdout)
 
-		cmd.Stderr, err = os.Create(spec.prefixPath("ini.err"))
+		cmd.Stderr, err = os.Create(dir.InJob(spec, "ini.err"))
 		err = errors.Wrap(err, "can't create file")
 	}
 
@@ -136,25 +135,25 @@ func (spec LocatedJobSpec) Init(ctx context.Context) error {
 	return errors.Wrapf(err, "job %q: init failed", spec.Dir)
 }
 
-func (spec LocatedJobSpec) Run(ctx context.Context) error {
+func (spec LocatedJobSpec) Run(ctx context.Context, dir Simondir) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c", spec.RunCmd)
 
 	var err error
 
-	cmd.Stdin, err = os.Open(spec.prefixPath("ini.out"))
+	cmd.Stdin, err = os.Open(dir.InJob(spec, "ini.out"))
 	err = errors.Wrap(err, "can't access initial conditions")
 
 	if err == nil {
 		defer Close(cmd.Stdin)
 
-		cmd.Stdout, err = os.Create(spec.prefixPath("run.out"))
+		cmd.Stdout, err = os.Create(dir.InJob(spec, "run.out"))
 		err = errors.Wrap(err, "can't create file")
 	}
 
 	if err == nil {
 		defer Close(cmd.Stdout)
 
-		cmd.Stderr, err = os.Create(spec.prefixPath("run.err"))
+		cmd.Stderr, err = os.Create(dir.InJob(spec, "run.err"))
 		err = errors.Wrap(err, "can't create file")
 	}
 
@@ -166,22 +165,6 @@ func (spec LocatedJobSpec) Run(ctx context.Context) error {
 	}
 
 	return errors.Wrapf(err, "job %q: run failed", spec.Dir)
-}
-
-func (spec LocatedJobSpec) Name(simondir string) string {
-	absSimondir, _ := filepath.Abs(simondir)
-	absDir, _ := filepath.Abs(spec.Dir)
-
-	if strings.HasPrefix(absDir, absSimondir) {
-		suffix, _ := filepath.Rel(absSimondir, absDir)
-		return suffix
-	}
-
-	return spec.Dir
-}
-
-func (spec LocatedJobSpec) prefixPath(path string) string {
-	return filepath.Join(spec.Dir, path)
 }
 
 func Close(closer interface{}) {

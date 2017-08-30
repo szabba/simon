@@ -12,7 +12,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -176,7 +175,8 @@ func (srv *Server) getJob() *LocatedJobSpec {
 		return nil
 	}
 
-	job, err := srv.loadDef(string(jobs[0]))
+	var job LocatedJobSpec
+	err = job.Load(srv.simondir, string(jobs[0]))
 	if err != nil {
 		log.Printf("%s", err)
 		return nil
@@ -189,7 +189,7 @@ func (srv *Server) do(ctx context.Context, job LocatedJobSpec) error {
 	if srv.build {
 
 		log.Printf("job %q: build starts", job.Dir)
-		err := job.Build(ctx)
+		err := job.Build(ctx, srv.simondir)
 		if err != nil {
 			return err
 		}
@@ -200,23 +200,18 @@ func (srv *Server) do(ctx context.Context, job LocatedJobSpec) error {
 	}
 
 	log.Printf("job %q: init starts", job.Dir)
-	err := job.Init(ctx)
+	err := job.Init(ctx, srv.simondir)
 	if err != nil {
 		return err
 	}
 	log.Printf("job %q: init done", job.Dir)
 
 	log.Printf("job %q: run starts", job.Dir)
-	err = job.Run(ctx)
+	err = job.Run(ctx, srv.simondir)
 	if err == nil {
 		log.Printf("job %q: run done", job.Dir)
 	}
 	return err
 }
 
-func (srv *Server) queuePath() string {
-	if filepath.IsAbs(srv.queueFlag) {
-		return srv.queueFlag
-	}
-	return filepath.Join(srv.simondir, srv.queueFlag)
-}
+func (srv *Server) queuePath() string { return srv.simondir.NormalizePath(srv.queueFlag) }
